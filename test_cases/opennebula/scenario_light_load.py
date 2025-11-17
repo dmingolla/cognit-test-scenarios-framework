@@ -28,6 +28,8 @@ class LightLoadScenario(CognitDevice):
     Light load scenario with minimal computational requirements.
     Simulates IoT devices with occasional light processing.
     """
+    # Set to False to use the same device ID for all users
+    randomize_device_id = True
     
     REQS_INIT = {
         "ID": "device-light-01",
@@ -48,6 +50,6 @@ class LightLoadScenario(CognitDevice):
         """Offload light computation."""
         result = self.offload_function(light_computation, 1)
         print("-----------------------------------------------")
-        print(f"Flavour: {self.REQS_INIT['FLAVOUR']}, result: {result}")
+        print(f"Device ID: {self.REQS_INIT['ID']}, Flavour: {self.REQS_INIT['FLAVOUR']}, result: {result}")
         print("-----------------------------------------------")
 

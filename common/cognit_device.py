@@ -12,6 +12,8 @@ from typing import Callable, Any, Optional
 import sys
 import os
 import time
+import copy
+import uuid
 
 from cognit import device_runtime
 
@@ -31,10 +33,14 @@ class CognitDevice(User):
     
     REQS_INIT: dict = None
     config_path: str = None
+    randomize_device_id: bool = True  # Set to False to use the same device ID for all users
     
     def __init__(self, *args, **kwargs):
         """
         Initialize the CognitDevice.
+        
+        Each Locust user gets a unique instance with its own REQS_INIT.
+        If randomize_device_id is True, each user will have a unique device ID.
         
         Raises:
             ValueError: If REQS_INIT or config_path are not defined
@@ -46,6 +52,17 @@ class CognitDevice(User):
         
         if self.config_path is None:
             raise ValueError("config_path must be defined in the subclass")
+        
+        # Create a deep copy of REQS_INIT for this user instance
+        # This ensures each user has its own independent configuration
+        self.REQS_INIT = copy.deepcopy(self.__class__.REQS_INIT)
+        
+        # Randomize device ID if enabled
+        if self.randomize_device_id:
+            base_id = self.REQS_INIT.get("ID", "device")
+            # Generate a unique ID using UUID (short version)
+            unique_suffix = str(uuid.uuid4())[:8]
+            self.REQS_INIT["ID"] = f"{base_id}-{unique_suffix}"
         
         self.device_runtime: Optional[device_runtime.DeviceRuntime] = None
     
