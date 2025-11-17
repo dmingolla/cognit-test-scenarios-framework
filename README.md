@@ -51,3 +51,24 @@ locust -f test_cases/opennebula/scenario_light_load.py
 ```
 
 Open `http://localhost:8089` in your browser to access the Locust web UI.
+
+## How It Works
+
+Locust spawns multiple "users" (devices) that run tasks concurrently. Each user is an instance of your scenario class, which inherits from `CognitDevice`. The `CognitDevice` base class handles:
+- Device runtime initialization with COGNIT
+- Function offloading to edge nodes
+- Automatic metrics reporting to Locust
+
+To create a new test case, simply inherit from `CognitDevice`, define your `REQS_INIT` configuration and `@task` methods. Each task calls `self.offload_function()` to execute workloads remotely. This abstraction means you only need to focus on defining your workload functions and device requirements, not the underlying COGNIT integration.
+
+### CLI Examples
+
+Run with specific number of devices and devices spawn rate:
+
+```bash
+# Run with 10 devices, spawn 2 devices per second
+locust -f test_cases/opennebula/scenario_light_load.py --headless --users 10 --spawn-rate 2
+
+# Run with 5 devices, spawn 1 devices per second, run for 60 seconds
+locust -f test_cases/opennebula/scenario_light_load.py --headless --users 5 --spawn-rate 1 --run-time 60s
+```
