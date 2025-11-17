@@ -47,7 +47,7 @@ Run the example scenario:
 
 ```bash
 source .venv/bin/activate
-locust -f partners/example/scenario_concurrent.py
+locust -f test_cases/opennebula/scenario_light_load.py
 ```
 
 Open `http://localhost:8089` in your browser to access the Locust web UI.
