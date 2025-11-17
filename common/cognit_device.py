@@ -27,6 +27,8 @@ class CognitDevice(User):
     - Cleanup on test completion
     """
     
+    abstract = True
+    
     REQS_INIT: dict = None
     config_path: str = None
     

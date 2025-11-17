@@ -1,5 +1,5 @@
 # Config
-config/cognit-config.yml
+cognit-config.yml
 
 # Python
 __pycache__/
