@@ -21,6 +21,7 @@ import hashlib
 from datetime import datetime
 
 from common.metrics_logger import MetricsLogger
+from common.logger import logger
 
 from cognit import device_runtime
 
@@ -159,11 +160,15 @@ class CognitDevice(User):
         Initialize the device runtime when a Locust user starts.
         Called automatically by Locust before tasks are executed.
         """
+        logger.info(f"Starting device initialization for {self.REQS_INIT.get('ID', 'unknown')}")
+        logger.debug(f"Device requirements: {self.REQS_INIT}")
+        
         try:
             self.device_runtime = device_runtime.DeviceRuntime(self.config_path)
             success = self.device_runtime.init(self.REQS_INIT)
             
             if not success:
+                logger.error(f"Device runtime init returned False for device {self.REQS_INIT.get('ID')}")
                 events.request.fire(
                     request_type="init",
                     name="device_runtime_init",
@@ -174,7 +179,10 @@ class CognitDevice(User):
                 )
                 raise Exception("Failed to initialize device runtime")
             
+            logger.info(f"Device {self.REQS_INIT.get('ID')} initialized successfully")
+            
         except Exception as e:
+            logger.error(f"Exception during device init for {self.REQS_INIT.get('ID')}: {e}")
             events.request.fire(
                 request_type="init",
                 name="device_runtime_init",
@@ -233,6 +241,7 @@ class CognitDevice(User):
             app_reqs_json = "{}"
         
         try:
+            logger.debug(f"Calling {function.__name__} for device {self.REQS_INIT.get('ID')}")
             result = self.device_runtime.call(function, *args, timeout=timeout)
             response_time = int((time.time() - start_time) * 1000)
             
@@ -244,6 +253,7 @@ class CognitDevice(User):
             if result is None:
                 status = "FAILURE"
                 error_msg = "Check the Locust logs for more details. Most likely, no backend available for the requested flavor/requirements"
+                logger.warning(f"Device {self.REQS_INIT.get('ID')}: {function.__name__} returned None - {error_msg}")
 
             # Check if result has ret_code attribute
             elif hasattr(result, "ret_code"):
@@ -254,10 +264,12 @@ class CognitDevice(User):
                     if ret_code_val != 0:
                         status = "FAILURE"
                         error_msg = str(getattr(result, "err", "Unknown execution error"))
+                        logger.warning(f"Device {self.REQS_INIT.get('ID')}: {function.__name__} failed with ret_code={ret_code_val}, error={error_msg}")
                 except Exception as e:
-                    print(f"Warning: Failed to parse ret_code: {e}")
+                    logger.error(f"Failed to parse ret_code for device {self.REQS_INIT.get('ID')}: {e}")
 
             if status == "SUCCESS":
+                logger.info(f"Device {self.REQS_INIT.get('ID')}: {function.__name__} completed successfully in {response_time}ms")
                 events.request.fire(
                     request_type="offload",
                     name=f"{function.__name__}",
@@ -283,6 +295,7 @@ class CognitDevice(User):
             
         except Exception as e:
             response_time = int((time.time() - start_time) * 1000)
+            logger.error(f"Device {self.REQS_INIT.get('ID')}: Exception in {function.__name__}: {e}")
             
             events.request.fire(
                 request_type="offload",

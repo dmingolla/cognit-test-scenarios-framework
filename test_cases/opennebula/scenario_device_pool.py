@@ -47,7 +47,7 @@ class DevicePoolScenario(CognitDevice):
     for i in range(1, 11):
         device_id = f"device-pool-{i:02d}"
         # Alternate flavors: Odd=GlobalOptimizer, Even=HighPerformance
-        flavour = "GlobalOptimizer" if i % 2 != 0 else "HighPerformance"
+        flavour = "GlobalOptimizer"
         # Shift latitude slightly for each device
         lat = 41.3851 + (i * 0.01)
         

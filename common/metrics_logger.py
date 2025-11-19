@@ -1,3 +1,7 @@
+"""
+Simple metrics logger to store metrics in a SQLite database.
+"""
+
 import sqlite3
 import threading
 import os
