@@ -227,17 +227,44 @@ class CognitDevice(User):
             result = self.device_runtime.call(function, *args, timeout=timeout)
             response_time = int((time.time() - start_time) * 1000)
             
-            events.request.fire(
-                request_type="offload",
-                name=f"{function.__name__}",
-                response_time=response_time,
-                response_length=len(str(result)) if result is not None else 0,
-                exception=None,
-                context={}
-            )
+            # Check for execution error in result object
+            status = "SUCCESS"
+            error_msg = None
             
-            # Log success metric to SQLite
-            self._log_to_db(function.__name__, "SUCCESS", response_time, result, app_reqs_json=app_reqs_json)
+            # Check if result has ret_code attribute
+            if hasattr(result, "ret_code"):
+                try:
+                    # Handle potential Enum or integer
+                    ret_code_val = result.ret_code.value if hasattr(result.ret_code, "value") else int(result.ret_code)
+                    
+                    if ret_code_val != 0:
+                        status = "FAILURE"
+                        error_msg = str(getattr(result, "err", "Unknown execution error"))
+                except Exception as e:
+                    print(f"Warning: Failed to parse ret_code: {e}")
+
+            if status == "SUCCESS":
+                events.request.fire(
+                    request_type="offload",
+                    name=f"{function.__name__}",
+                    response_time=response_time,
+                    response_length=len(str(result)) if result is not None else 0,
+                    exception=None,
+                    context={}
+                )
+                # Log success metric to SQLite
+                self._log_to_db(function.__name__, "SUCCESS", response_time, result, app_reqs_json=app_reqs_json)
+            else:
+                events.request.fire(
+                    request_type="offload",
+                    name=f"{function.__name__}",
+                    response_time=response_time,
+                    response_length=0,
+                    exception=Exception(error_msg),
+                    context={}
+                )
+                # Log failure metric to SQLite
+                self._log_to_db(function.__name__, "FAILURE", response_time, result, error_msg=error_msg, app_reqs_json=app_reqs_json)
             
             return result
             
