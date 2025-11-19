@@ -15,6 +15,12 @@ import time
 import copy
 import uuid
 import threading
+import traceback
+import json
+import hashlib
+from datetime import datetime
+
+from common.metrics_logger import MetricsLogger
 
 from cognit import device_runtime
 
@@ -78,6 +84,23 @@ class CognitDevice(User):
     _pool_lock = threading.Lock()
     _available_pool: list = None  # Tracks remaining IDs from the pool
     
+    # Metrics Logger
+    _metrics_logger = MetricsLogger()
+    
+    # Generate a unique session ID for this process execution
+    # This ensures all devices in this run share a common identifier base
+    _session_id = str(uuid.uuid4())[:8]
+
+    @property
+    def run_id(self):
+        """
+        Generate a deterministic Run ID for this scenario execution.
+        Combines the process-level session ID with the Scenario Class Name.
+        Ensures all devices in the same scenario share the same Run ID.
+        """
+        unique_string = f"{self._session_id}_{self.__class__.__name__}"
+        return hashlib.md5(unique_string.encode()).hexdigest()
+
     def __init__(self, *args, **kwargs):
         """
         Initialize the CognitDevice.
@@ -187,6 +210,19 @@ class CognitDevice(User):
         
         start_time = time.time()
         
+        # Capture request arguments for logging
+        app_reqs_json = None
+        try:
+            # Create a dictionary of arguments to store
+            req_data = {
+                "device_requirements": self.REQS_INIT
+            }
+            # Convert to JSON string, handling potential serialization issues gracefully
+            app_reqs_json = json.dumps(req_data, default=str)
+        except Exception as e:
+            print(f"Warning: Failed to serialize request args: {e}")
+            app_reqs_json = "{}"
+        
         try:
             result = self.device_runtime.call(function, *args, timeout=timeout)
             response_time = int((time.time() - start_time) * 1000)
@@ -199,6 +235,9 @@ class CognitDevice(User):
                 exception=None,
                 context={}
             )
+            
+            # Log success metric to SQLite
+            self._log_to_db(function.__name__, "SUCCESS", response_time, result, app_reqs_json=app_reqs_json)
             
             return result
             
@@ -213,8 +252,38 @@ class CognitDevice(User):
                 exception=e,
                 context={}
             )
+            
+            # Log failure metric to SQLite
+            self._log_to_db(function.__name__, "FAILURE", response_time, None, error_msg=str(e), app_reqs_json=app_reqs_json)
+            
             return None
     
+    def _log_to_db(self, task_name, status, latency, result=None, error_msg=None, app_reqs_json=None):
+        """Helper to log metrics to SQLite."""
+        metric_val = None
+        
+        # Try to extract a numeric metric value if result is a dict or number
+        if isinstance(result, dict):
+            # Look for common metric keys
+            for key in ["operations", "throughput", "cpu", "latency"]:
+                if key in result and isinstance(result[key], (int, float)):
+                    metric_val = result[key]
+                    break
+        elif isinstance(result, (int, float)):
+            metric_val = result
+            
+        self._metrics_logger.log_metric(
+            run_id=self.run_id,
+            scenario_name=self.__class__.__name__,
+            device_id=self.REQS_INIT["ID"],
+            task_name=task_name,
+            status=status,
+            latency_ms=latency,
+            metric_value=metric_val,
+            error_msg=error_msg,
+            app_reqs_json=app_reqs_json
+        )
+
     def on_stop(self):
         """
         Cleanup when a Locust user stops.
