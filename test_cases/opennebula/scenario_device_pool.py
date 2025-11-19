@@ -42,10 +42,26 @@ class DevicePoolScenario(CognitDevice):
     IMPORTANT: The number of users must exactly match the pool size (10).
     Use: locust -f scenario_device_pool.py --headless --users 10 --spawn-rate 2
     """
-    # Define fixed pool of 10 device IDs
-    device_id_pool = [
-        f"device-pool-{i:02d}" for i in range(1, 11)
-    ]
+    # Define fixed pool of 10 device IDs with unique requirements
+    device_id_pool = []
+    for i in range(1, 11):
+        device_id = f"device-pool-{i:02d}"
+        # Alternate flavors: Odd=GlobalOptimizer, Even=HighPerformance
+        flavour = "GlobalOptimizer" if i % 2 != 0 else "HighPerformance"
+        # Shift latitude slightly for each device
+        lat = 41.3851 + (i * 0.01)
+        
+        reqs = {
+            "ID": device_id,
+            "FLAVOUR": flavour,
+            "IS_CONFIDENTIAL": False,
+            "PROVIDERS": ["provider_1"],
+            "GEOLOCATION": {
+                "latitude": round(lat, 4),
+                "longitude": 2.1734
+            }
+        }
+        device_id_pool.append(reqs)
     
     # Pool-based scenarios automatically disable randomization
     randomize_device_id = False

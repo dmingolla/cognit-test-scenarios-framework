@@ -136,8 +136,15 @@ class CognitDevice(User):
                         f"Device ID pool exhausted. All {len(self.__class__.device_id_pool)} IDs have been assigned."
                     )
                 
-                assigned_id = self.__class__._available_pool.pop(0)
-                self.REQS_INIT["ID"] = assigned_id
+                assigned_item = self.__class__._available_pool.pop(0)
+                
+                if isinstance(assigned_item, dict):
+                    # It's a full config object, use it to override REQS_INIT
+                    self.REQS_INIT = copy.deepcopy(assigned_item)
+                    if "ID" not in self.REQS_INIT:
+                        raise ValueError("Device pool items must contain an 'ID' field")
+                else:
+                    raise ValueError("Device pool items must be a dictionary")
         # Randomize device ID if enabled (existing behavior preserved)
         elif self.randomize_device_id:
             base_id = self.REQS_INIT.get("ID", "device")
@@ -184,6 +191,8 @@ class CognitDevice(User):
         
         This is a helper method that wraps device_runtime.call() and provides
         standardized success/failure reporting to Locust.
+
+        We log the request information to the database for later analysis.
         
         Args:
             function: The function to offload
