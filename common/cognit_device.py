@@ -240,8 +240,13 @@ class CognitDevice(User):
             status = "SUCCESS"
             error_msg = None
             
+            # First check if result is None
+            if result is None:
+                status = "FAILURE"
+                error_msg = "Check the Locust logs for more details. Most likely, no backend available for the requested flavor/requirements"
+
             # Check if result has ret_code attribute
-            if hasattr(result, "ret_code"):
+            elif hasattr(result, "ret_code"):
                 try:
                     # Handle potential Enum or integer
                     ret_code_val = result.ret_code.value if hasattr(result.ret_code, "value") else int(result.ret_code)
@@ -274,7 +279,6 @@ class CognitDevice(User):
                 )
                 # Log failure metric to SQLite
                 self._log_to_db(function.__name__, "FAILURE", response_time, result, error_msg=error_msg, app_reqs_json=app_reqs_json)
-            
             return result
             
         except Exception as e:
