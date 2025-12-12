@@ -14,8 +14,53 @@ import os
 import time
 import copy
 import uuid
+import threading
+import traceback
+import json
+import hashlib
+from datetime import datetime
+
+from common.metrics_logger import MetricsLogger
+from common.logger import logger
 
 from cognit import device_runtime
+
+
+def _validate_device_pool(environment, **kwargs):
+    """
+    Validate that user count matches device ID pool size when pool is defined.
+    Called automatically by Locust before test starts.
+    """
+    # Find all CognitDevice subclasses that have a device_id_pool defined
+    for user_class in environment.runner.user_classes:
+        if issubclass(user_class, CognitDevice) and user_class.device_id_pool is not None:
+            pool_size = len(user_class.device_id_pool)
+            num_users = environment.runner.target_user_count
+            
+            if num_users != pool_size:
+                error_msg = (
+                    f"Device ID pool has {pool_size} IDs but {num_users} users specified. "
+                    f"They must match. Use --users {pool_size} to run this scenario."
+                )
+                print(f"ERROR: {error_msg}")
+                environment.runner.quit()
+                raise ValueError(error_msg)
+
+
+def _reset_device_pool(environment, **kwargs):
+    """
+    Reset device ID pools after test completes so they can be reused in subsequent runs.
+    Called automatically by Locust after test stops.
+    """
+    for user_class in environment.runner.user_classes:
+        if issubclass(user_class, CognitDevice) and user_class.device_id_pool is not None:
+            with user_class._pool_lock:
+                user_class._available_pool = None  # Reset so it reinitializes on next run
+
+
+# Register validation and reset hooks
+events.test_start.add_listener(_validate_device_pool)
+events.test_stop.add_listener(_reset_device_pool)
 
 
 class CognitDevice(User):
@@ -34,7 +79,29 @@ class CognitDevice(User):
     REQS_INIT: dict = None
     config_path: str = None
     randomize_device_id: bool = True  # Set to False to use the same device ID for all users
+    device_id_pool: list = None  # Optional: Fixed list of device IDs to assign (one per user)
     
+    # Thread-safe pool management
+    _pool_lock = threading.Lock()
+    _available_pool: list = None  # Tracks remaining IDs from the pool
+    
+    # Metrics Logger
+    _metrics_logger = MetricsLogger()
+    
+    # Generate a unique session ID for this process execution
+    # This ensures all devices in this run share a common identifier base
+    _session_id = str(uuid.uuid4())[:8]
+
+    @property
+    def run_id(self):
+        """
+        Generate a deterministic Run ID for this scenario execution.
+        Combines the process-level session ID with the Scenario Class Name.
+        Ensures all devices in the same scenario share the same Run ID.
+        """
+        unique_string = f"{self._session_id}_{self.__class__.__name__}"
+        return hashlib.md5(unique_string.encode()).hexdigest()
+
     def __init__(self, *args, **kwargs):
         """
         Initialize the CognitDevice.
@@ -57,8 +124,30 @@ class CognitDevice(User):
         # This ensures each user has its own independent configuration
         self.REQS_INIT = copy.deepcopy(self.__class__.REQS_INIT)
         
-        # Randomize device ID if enabled
-        if self.randomize_device_id:
+        # Initialize device ID pool if defined (only once at class level)
+        if self.__class__.device_id_pool is not None:
+            with self.__class__._pool_lock:
+                # Initialize available pool on first access
+                if self.__class__._available_pool is None:
+                    self.__class__._available_pool = list(self.__class__.device_id_pool)
+                
+                # Assign device ID from pool and remove it (thread-safe)
+                if len(self.__class__._available_pool) == 0:
+                    raise ValueError(
+                        f"Device ID pool exhausted. All {len(self.__class__.device_id_pool)} IDs have been assigned."
+                    )
+                
+                assigned_item = self.__class__._available_pool.pop(0)
+                
+                if isinstance(assigned_item, dict):
+                    # It's a full config object, use it to override REQS_INIT
+                    self.REQS_INIT = copy.deepcopy(assigned_item)
+                    if "ID" not in self.REQS_INIT:
+                        raise ValueError("Device pool items must contain an 'ID' field")
+                else:
+                    raise ValueError("Device pool items must be a dictionary")
+        # Randomize device ID if enabled (existing behavior preserved)
+        elif self.randomize_device_id:
             base_id = self.REQS_INIT.get("ID", "device")
             # Generate a unique ID using UUID (short version)
             unique_suffix = str(uuid.uuid4())[:8]
@@ -71,11 +160,15 @@ class CognitDevice(User):
         Initialize the device runtime when a Locust user starts.
         Called automatically by Locust before tasks are executed.
         """
+        logger.info(f"Starting device initialization for {self.REQS_INIT.get('ID', 'unknown')}")
+        logger.debug(f"Device requirements: {self.REQS_INIT}")
+        
         try:
             self.device_runtime = device_runtime.DeviceRuntime(self.config_path)
             success = self.device_runtime.init(self.REQS_INIT)
             
             if not success:
+                logger.error(f"Device runtime init returned False for device {self.REQS_INIT.get('ID')}")
                 events.request.fire(
                     request_type="init",
                     name="device_runtime_init",
@@ -86,7 +179,10 @@ class CognitDevice(User):
                 )
                 raise Exception("Failed to initialize device runtime")
             
+            logger.info(f"Device {self.REQS_INIT.get('ID')} initialized successfully")
+            
         except Exception as e:
+            logger.error(f"Exception during device init for {self.REQS_INIT.get('ID')}: {e}")
             events.request.fire(
                 request_type="init",
                 name="device_runtime_init",
@@ -103,6 +199,8 @@ class CognitDevice(User):
         
         This is a helper method that wraps device_runtime.call() and provides
         standardized success/failure reporting to Locust.
+
+        We log the request information to the database for later analysis.
         
         Args:
             function: The function to offload
@@ -129,23 +227,75 @@ class CognitDevice(User):
         
         start_time = time.time()
         
+        # Capture request arguments for logging
+        app_reqs_json = None
         try:
+            # Create a dictionary of arguments to store
+            req_data = {
+                "device_requirements": self.REQS_INIT
+            }
+            # Convert to JSON string, handling potential serialization issues gracefully
+            app_reqs_json = json.dumps(req_data, default=str)
+        except Exception as e:
+            print(f"Warning: Failed to serialize request args: {e}")
+            app_reqs_json = "{}"
+        
+        try:
+            logger.debug(f"Calling {function.__name__} for device {self.REQS_INIT.get('ID')}")
             result = self.device_runtime.call(function, *args, timeout=timeout)
             response_time = int((time.time() - start_time) * 1000)
             
-            events.request.fire(
-                request_type="offload",
-                name=f"{function.__name__}",
-                response_time=response_time,
-                response_length=len(str(result)) if result is not None else 0,
-                exception=None,
-                context={}
-            )
+            # Check for execution error in result object
+            status = "SUCCESS"
+            error_msg = None
             
+            # First check if result is None
+            if result is None:
+                status = "FAILURE"
+                error_msg = "Check the Locust logs for more details. Most likely, no backend available for the requested flavor/requirements"
+                logger.warning(f"Device {self.REQS_INIT.get('ID')}: {function.__name__} returned None - {error_msg}")
+
+            # Check if result has ret_code attribute
+            elif hasattr(result, "ret_code"):
+                try:
+                    # Handle potential Enum or integer
+                    ret_code_val = result.ret_code.value if hasattr(result.ret_code, "value") else int(result.ret_code)
+                    
+                    if ret_code_val != 0:
+                        status = "FAILURE"
+                        error_msg = str(getattr(result, "err", "Unknown execution error"))
+                        logger.warning(f"Device {self.REQS_INIT.get('ID')}: {function.__name__} failed with ret_code={ret_code_val}, error={error_msg}")
+                except Exception as e:
+                    logger.error(f"Failed to parse ret_code for device {self.REQS_INIT.get('ID')}: {e}")
+
+            if status == "SUCCESS":
+                logger.info(f"Device {self.REQS_INIT.get('ID')}: {function.__name__} completed successfully in {response_time}ms")
+                events.request.fire(
+                    request_type="offload",
+                    name=f"{function.__name__}",
+                    response_time=response_time,
+                    response_length=len(str(result)) if result is not None else 0,
+                    exception=None,
+                    context={}
+                )
+                # Log success metric to SQLite
+                self._log_to_db(function.__name__, "SUCCESS", response_time, result, app_reqs_json=app_reqs_json)
+            else:
+                events.request.fire(
+                    request_type="offload",
+                    name=f"{function.__name__}",
+                    response_time=response_time,
+                    response_length=0,
+                    exception=Exception(error_msg),
+                    context={}
+                )
+                # Log failure metric to SQLite
+                self._log_to_db(function.__name__, "FAILURE", response_time, result, error_msg=error_msg, app_reqs_json=app_reqs_json)
             return result
             
         except Exception as e:
             response_time = int((time.time() - start_time) * 1000)
+            logger.error(f"Device {self.REQS_INIT.get('ID')}: Exception in {function.__name__}: {e}")
             
             events.request.fire(
                 request_type="offload",
@@ -155,8 +305,38 @@ class CognitDevice(User):
                 exception=e,
                 context={}
             )
+            
+            # Log failure metric to SQLite
+            self._log_to_db(function.__name__, "FAILURE", response_time, None, error_msg=str(e), app_reqs_json=app_reqs_json)
+            
             return None
     
+    def _log_to_db(self, task_name, status, latency, result=None, error_msg=None, app_reqs_json=None):
+        """Helper to log metrics to SQLite."""
+        metric_val = None
+        
+        # Try to extract a numeric metric value if result is a dict or number
+        if isinstance(result, dict):
+            # Look for common metric keys
+            for key in ["operations", "throughput", "cpu", "latency"]:
+                if key in result and isinstance(result[key], (int, float)):
+                    metric_val = result[key]
+                    break
+        elif isinstance(result, (int, float)):
+            metric_val = result
+            
+        self._metrics_logger.log_metric(
+            run_id=self.run_id,
+            scenario_name=self.__class__.__name__,
+            device_id=self.REQS_INIT["ID"],
+            task_name=task_name,
+            status=status,
+            latency_ms=latency,
+            metric_value=metric_val,
+            error_msg=error_msg,
+            app_reqs_json=app_reqs_json
+        )
+
     def on_stop(self):
         """
         Cleanup when a Locust user stops.

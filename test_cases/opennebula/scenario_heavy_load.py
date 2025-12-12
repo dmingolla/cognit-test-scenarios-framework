@@ -41,11 +41,11 @@ class HeavyLoadScenario(CognitDevice):
     REQS_INIT = {
         "ID": "device-high-load",
         "FLAVOUR": "GlobalOptimizer",
-        "IS_CONFIDENTIAL": False,
+        #"IS_CONFIDENTIAL": False,
         "PROVIDERS": ["provider_1"],
         "GEOLOCATION": {
-            "latitude": 41.3851,
-            "longitude": 2.1734
+            "latitude": 59.3294,
+            "longitude": 18.0687
         }
     }
     
