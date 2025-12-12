@@ -55,7 +55,7 @@ class DevicePoolScenario(CognitDevice):
             "ID": device_id,
             "FLAVOUR": flavour,
             "IS_CONFIDENTIAL": False,
-            "PROVIDERS": ["provider_1"],
+            "PROVIDERS": ["ICE"],
             "GEOLOCATION": {
                 "latitude": round(lat, 4),
                 "longitude": 2.1734
