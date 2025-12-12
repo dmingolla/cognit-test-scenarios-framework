@@ -1,6 +1,19 @@
 """
 Energy Carbon Efficiency Scenario
 Each device uses stress-ng to generate controlled CPU workloads for measuring power consumption.
+
+Workflow:
+1. When you run Locust with this scenario, it spawns multiple "users" (simulated devices)
+2. Each user gets assigned a unique device ID from the predefined pool (e.g., cognit-test-innovation-001)
+3. Each user initializes its connection to the COGNIT platform with its device requirements
+4. Users continuously execute tasks in a loop:
+   - Wait a random time between MIN_WAIT and MAX_WAIT seconds
+   - Execute the @task method (offload_stress_task)
+   - Offload the stress_ng_cpu function to an edge node via COGNIT
+   - The edge node runs stress-ng with the configured CPU load and duration
+   - Wait again, then repeat
+5. All execution metrics (latency, success/failure) are automatically logged to the database
+6. The test runs until you stop it or the specified run-time expires
 """
 
 import os
