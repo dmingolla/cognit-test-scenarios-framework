@@ -12,19 +12,39 @@ Workflow:
    - Offload the stress_ng_cpu function to an edge node via COGNIT
    - The edge node runs stress-ng with the configured CPU load and duration
    - Wait again, then repeat
-5. All execution metrics (latency, success/failure) are automatically logged to the database
-6. The test runs until you stop it or the specified run-time expires
+5. The test runs until you stop it or the specified run-time expires
+
+
+!!! IMPORTANT: The number of users you pass in the command line below, must exactly match the value of the POOL_SIZE variable.
+
+Use: locust -f scenario_energy_carbon_efficiency.py --headless --users <POOL_SIZE> --spawn-rate <SPAWN_RATE> --run-time <RUN_TIME>
 """
 
 import os
 from common.cognit_device import CognitDevice
 from locust import task, between
+from common.logger import logger
 
 
 # ============================================================
+# CONFIGURATION
+# ============================================================
+
 # DEVICE POOL CONFIGURATION
-# ============================================================
-POOL_SIZE = 10  # Start small, scale up to 200 later
+POOL_SIZE = 2  # Number of devices to simulate
+
+# WORKLOAD CONFIGURATION
+# Option 1: Same load for all devices - Set USE_PER_DEVICE_LOAD = False
+# Option 2: Different load per device - Set USE_PER_DEVICE_LOAD = True and configure in device_id_pool below
+USE_PER_DEVICE_LOAD = False  # If True, each device uses its own CPU_LOAD from device_id_pool
+CPU_LOAD = 50          # Default CPU load % (1-100) - used when USE_PER_DEVICE_LOAD = False
+CPU_WORKERS = 0        # Number of CPU workers (0 = use all available CPUs)
+DURATION = 500         # Stress duration per request in seconds
+
+# REQUEST TIMING CONFIGURATION (staggering to avoid simultaneous requests)
+MIN_WAIT = 10          # Minimum seconds between requests (random wait range)
+MAX_WAIT = 20          # Maximum seconds between requests (random wait range)
+INITIAL_DELAY_MAX = 5  # Random delay at start (0 to this value) to stagger device initialization
 
 
 def stress_ng_cpu(duration: int, cpu_load: int, workers: int = 0):
@@ -62,36 +82,20 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
     """
     Energy and carbon efficiency scenario with configurable stress-ng workload.
     
-    This scenario uses a predefined pool of device IDs (configurable size, default 10).
+    This scenario uses a predefined pool of device IDs (configurable size).
     Each Locust user gets assigned exactly one unique device ID from the pool.
     Devices offload stress-ng CPU workloads with configurable parameters for
     measuring energy consumption and carbon emissions.
-    
-    IMPORTANT: The number of users must exactly match the pool size.
-    Use: locust -f scenario_energy_carbon_efficiency.py --headless --users 10 --spawn-rate 1
     """
-    
-    # ============================================================
-    # WORKLOAD CONFIGURATION - Full control over stress-ng
-    # ============================================================
-    CPU_LOAD = 50          # CPU load percentage (1-100) - passed to stress-ng --cpu-load
-    CPU_WORKERS = 0        # Number of parallel CPU workers (0 = use all available CPUs)
-    DURATION = 500           # Stress duration in seconds
-    
-    # ============================================================
-    # FREQUENCY CONFIGURATION - Control request timing
-    # ============================================================
-    MIN_WAIT = 10          # Minimum seconds between requests
-    MAX_WAIT = 20          # Maximum seconds between requests
-    INITIAL_DELAY_MAX = 5  # Random delay at start to stagger requests
     
     # Pool-based scenarios automatically disable randomization
     randomize_device_id = False
     
     # Define fixed pool of device IDs
+    # If USE_PER_DEVICE_LOAD = True, you can add "CPU_LOAD" to each device dict below
     device_id_pool = []
     for i in range(1, POOL_SIZE + 1):
-        device_id_pool.append({
+        device_config = {
             "ID": f"cognit-test-innovation-{i:03d}",
             "FLAVOUR": "GlobalOptimizer",
             "PROVIDERS": ["ICE"],
@@ -99,7 +103,23 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
                 "latitude": 42.2294,
                 "longitude": 12.0687
             }
-        })
+        }
+        
+        # Add per-device CPU load if enabled
+        if USE_PER_DEVICE_LOAD:
+            # Linear progression (Device 1=10%, Device 2=20%, Device 3=30%, etc.)
+
+            device_config["CPU_LOAD"] = min(100, max(0, int(10 * i)))
+            
+            # Specific values for each device (you can define a list like this but ouside of the loop and then just use the index i to get the value)
+            # pre_defined_cpu_loads = [25, 50, 75, 100, 30, 60, 90, 40, 70, 80]
+            # device_config["CPU_LOAD"] = pre_defined_cpu_loads[i-1]
+            
+            # Example 3: Random distribution
+            # import random
+            # device_config["CPU_LOAD"] = random.randint(20, 80)
+        
+        device_id_pool.append(device_config)
     
     REQS_INIT = {
         "ID": "cognit-test-innovation-default",  # Will be overridden by pool assignment
@@ -124,23 +144,24 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
         if not hasattr(self, '_first_run_done'):
             import random
             import time
-            time.sleep(random.uniform(0, self.INITIAL_DELAY_MAX))
+            time.sleep(random.uniform(0, INITIAL_DELAY_MAX))
             self._first_run_done = True
         
+        # Use per-device CPU load if configured, otherwise use default
+        cpu_load = self.REQS_INIT.get("CPU_LOAD", CPU_LOAD)
+        
+        # Validate CPU load is integer between 0-100
+        cpu_load = int(max(0, min(100, cpu_load)))
+        
+        logger.info(f"Offloading stress-ng CPU workload for device {self.REQS_INIT['ID']} with CPU load {cpu_load}%, workers {CPU_WORKERS}, duration {DURATION}s")
         result = self.offload_function(
             stress_ng_cpu, 
-            self.DURATION, 
-            self.CPU_LOAD, 
-            self.CPU_WORKERS
+            DURATION, 
+            cpu_load, 
+            CPU_WORKERS
         )
-        print("-----------------------------------------------")
-        print(f"Device ID: {self.REQS_INIT['ID']}, CPU Load: {self.CPU_LOAD}%, Workers: {self.CPU_WORKERS}, Duration: {self.DURATION}s, Result: {result}")
-        print("-----------------------------------------------")
 
 
-# Set wait_time after class definition to reference class variables
-EnergyCarbonEfficiencyScenario.wait_time = between(
-    EnergyCarbonEfficiencyScenario.MIN_WAIT,
-    EnergyCarbonEfficiencyScenario.MAX_WAIT
-)
+# Set wait_time after class definition to reference configuration variables
+EnergyCarbonEfficiencyScenario.wait_time = between(MIN_WAIT, MAX_WAIT)
 
