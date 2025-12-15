@@ -31,7 +31,7 @@ from common.logger import logger
 # ============================================================
 
 # DEVICE POOL CONFIGURATION
-POOL_SIZE = 2  # Number of devices to simulate
+POOL_SIZE = 5  # Number of devices to simulate
 
 # WORKLOAD CONFIGURATION
 # Option 1: Same load for all devices - Set USE_PER_DEVICE_LOAD = False
@@ -45,6 +45,14 @@ DURATION = 500         # Stress duration per request in seconds
 MIN_WAIT = 10          # Minimum seconds between requests (random wait range)
 MAX_WAIT = 20          # Maximum seconds between requests (random wait range)
 INITIAL_DELAY_MAX = 5  # Random delay at start (0 to this value) to stagger device initialization
+
+# Validate configuration
+if MIN_WAIT > MAX_WAIT:
+    raise ValueError(f"MIN_WAIT ({MIN_WAIT}) must be <= MAX_WAIT ({MAX_WAIT})")
+if DURATION <= 0:
+    raise ValueError(f"DURATION ({DURATION}) must be > 0")
+if CPU_WORKERS < 0:
+    raise ValueError(f"CPU_WORKERS ({CPU_WORKERS}) must be >= 0")
 
 
 def stress_ng_cpu(duration: int, cpu_load: int, workers: int = 0):
@@ -62,9 +70,38 @@ def stress_ng_cpu(duration: int, cpu_load: int, workers: int = 0):
     import subprocess
     import time
     
+    # Validate inputs
+    cpu_load = int(max(0, min(100, cpu_load)))
+    duration = max(1, int(duration))  # At least 1 second
+    workers = max(0, int(workers))
+    
     start = time.time()
     cmd = f"stress-ng --cpu {workers} --cpu-load {cpu_load} --timeout {duration}s"
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=duration + 10)
+    except subprocess.TimeoutExpired:
+        return {
+            "duration_requested": duration,
+            "duration_actual": round(time.time() - start, 2),
+            "cpu_load": cpu_load,
+            "workers": workers,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "stress-ng command timed out",
+            "error": "Command execution timeout"
+        }
+    except Exception as e:
+        return {
+            "duration_requested": duration,
+            "duration_actual": round(time.time() - start, 2),
+            "cpu_load": cpu_load,
+            "workers": workers,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": str(e),
+            "error": "Command execution failed"
+        }
+    
     elapsed = time.time() - start
     
     return {
@@ -111,12 +148,13 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
 
             device_config["CPU_LOAD"] = min(100, max(0, int(10 * i)))
             
-            # Specific values for each device (you can define a list like this but ouside of the loop and then just use the index i to get the value)
+            # Specific values for each device (define list outside loop, then use index)
             # pre_defined_cpu_loads = [25, 50, 75, 100, 30, 60, 90, 40, 70, 80]
+            # if len(pre_defined_cpu_loads) < POOL_SIZE:
+            #     raise ValueError(f"pre_defined_cpu_loads must have at least {POOL_SIZE} elements")
             # device_config["CPU_LOAD"] = pre_defined_cpu_loads[i-1]
             
-            # Example 3: Random distribution
-            # import random
+            # Random distribution (each device gets different random value)
             # device_config["CPU_LOAD"] = random.randint(20, 80)
         
         device_id_pool.append(device_config)
