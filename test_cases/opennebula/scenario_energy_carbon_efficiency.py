@@ -31,7 +31,7 @@ from common.logger import logger
 # ============================================================
 
 # DEVICE POOL CONFIGURATION
-POOL_SIZE = 5  # Number of devices to simulate
+POOL_SIZE = 1  # Number of devices to simulate
 
 # WORKLOAD CONFIGURATION
 # Option 1: Same load for all devices - Set USE_PER_DEVICE_LOAD = False
@@ -42,9 +42,9 @@ CPU_WORKERS = 0        # Number of CPU workers (0 = use all available CPUs)
 DURATION = 500         # Stress duration per request in seconds
 
 # REQUEST TIMING CONFIGURATION (staggering to avoid simultaneous requests)
-MIN_WAIT = 10          # Minimum seconds between requests (random wait range)
-MAX_WAIT = 20          # Maximum seconds between requests (random wait range)
-INITIAL_DELAY_MAX = 5  # Random delay at start (0 to this value) to stagger device initialization
+MIN_WAIT = 1          # Minimum seconds between requests (random wait range)
+MAX_WAIT = 1          # Maximum seconds between requests (random wait range)
+INITIAL_DELAY_MAX = 0  # Random delay at start (0 to this value) to stagger device initialization
 
 # Validate configuration
 if MIN_WAIT > MAX_WAIT:
@@ -135,7 +135,7 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
         device_config = {
             "ID": f"cognit-test-innovation-{i:03d}",
             "FLAVOUR": "GlobalOptimizer",
-            "PROVIDERS": ["ICE"],
+            "PROVIDERS": ["ICE", "Phoenix"],
             "GEOLOCATION": {
                 "latitude": 42.2294,
                 "longitude": 12.0687
@@ -162,7 +162,7 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
     REQS_INIT = {
         "ID": "cognit-test-innovation-default",  # Will be overridden by pool assignment
         "FLAVOUR": "GlobalOptimizer",
-        "PROVIDERS": ["ICE"],
+        "PROVIDERS": ["ICE", "Phoenix"],
         "GEOLOCATION": {
             "latitude": 42.2294,
             "longitude": 12.0687
@@ -178,12 +178,6 @@ class EnergyCarbonEfficiencyScenario(CognitDevice):
     @task
     def offload_stress_task(self):
         """Offload stress-ng workload with staggered timing."""
-        # Add random initial delay on first run to stagger requests
-        if not hasattr(self, '_first_run_done'):
-            import random
-            import time
-            time.sleep(random.uniform(0, INITIAL_DELAY_MAX))
-            self._first_run_done = True
         
         # Use per-device CPU load if configured, otherwise use default
         cpu_load = self.REQS_INIT.get("CPU_LOAD", CPU_LOAD)
